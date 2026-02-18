@@ -471,9 +471,9 @@ def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5
     
     result = response.json()
     
-    # L'API Freepik/Magnific est asynchrone - retourne un task_id
-    if 'task_id' in result:
-        task_id = result['task_id']
+    # L'API Freepik/Magnific est asynchrone - retourne un task_id dans 'data'
+    if 'data' in result and 'task_id' in result['data']:
+        task_id = result['data']['task_id']
         # Attendre et poll le résultat
         return poll_task_result(task_id, api_key)
     else:
@@ -495,17 +495,21 @@ def poll_task_result(task_id, api_key, max_attempts=30, delay=2):
         
         if response.status_code == 200:
             result = response.json()
+            # Le statut peut être dans result.status ou result.data.status
+            status = result.get('status') or result.get('data', {}).get('status', '').upper()
             
-            if result.get('status') == 'completed':
+            if status in ('COMPLETED', 'COMPLETED'):
                 # Télécharger l'image upscalée
-                if 'data' in result and 'url' in result['data']:
-                    image_url = result['data']['url']
+                data = result.get('data', {})
+                if 'url' in data:
+                    image_url = data['url']
                     img_response = requests.get(image_url, timeout=60)
                     if img_response.status_code == 200:
-                        return img_response.content, result['data']
+                        return img_response.content, data
                 raise Exception("Result URL not found")
-            elif result.get('status') == 'failed':
-                raise Exception(f"Task failed: {result.get('error', 'Unknown error')}")
+            elif status in ('FAILED', 'FAILED'):
+                error_msg = result.get('error') or result.get('data', {}).get('error', 'Unknown error')
+                raise Exception(f"Task failed: {error_msg}")
         
         time.sleep(delay)
     
