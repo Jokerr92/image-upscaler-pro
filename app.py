@@ -506,7 +506,7 @@ def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5
         raise Exception(f"Unexpected API response: {result}")
 
 
-def poll_task_result(task_id, api_key, max_attempts=30, delay=2):
+def poll_task_result(task_id, api_key, max_attempts=60, delay=3):
     """Poll le statut de la tâche jusqu'à completion"""
     headers = {
         'x-freepik-api-key': api_key
