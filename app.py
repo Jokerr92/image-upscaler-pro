@@ -21,7 +21,9 @@ CORS(app)
 UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'outputs'
 FREEPIK_API_KEY = os.getenv('FREEPIK_API_KEY', 'TA_CLE_API_ICI')
+# URLs API Freepik
 FREEPIK_API_URL = 'https://api.freepik.com/v1/ai/image-upscaler'
+FREEPIK_PRECISION_URL = 'https://api.freepik.com/v1/ai/upscaler/precision'
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -215,6 +217,13 @@ HTML_INTERFACE = '''
                 </select>
             </div>
             <div class="option-group">
+                <label>🎨 Mode d'upscale</label>
+                <select id="mode">
+                    <option value="precision" selected>🔒 Precision (préserve le texte)</option>
+                    <option value="creative">✨ Creative (ajoute des détails)</option>
+                </select>
+            </div>
+            <div class="option-group">
                 <label>🖼️ Qualité WebP (compression)</label>
                 <select id="quality">
                     <option value="80">80% (Fichier léger)</option>
@@ -332,6 +341,7 @@ HTML_INTERFACE = '''
             const formData = new FormData();
             files.forEach(file => formData.append('images', file));
             formData.append('scaleFactor', document.getElementById('scaleFactor').value);
+            formData.append('mode', document.getElementById('mode').value);
             formData.append('quality', document.getElementById('quality').value);
             formData.append('apiKey', apiKey);
             
@@ -440,8 +450,13 @@ def convert_to_webp(image_data, quality=85, max_width=None):
     return output.getvalue(), img.size
 
 
-def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5):
-    """Appelle l'API Freepik/Magnific pour upscaler une image"""
+def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5, mode='precision'):
+    """Appelle l'API Freepik/Magnific pour upscaler une image
+    
+    Modes:
+    - 'precision': Préserve le texte, fidélité maximale (RECOMMANDÉ pour photos produit)
+    - 'creative': Ajoute des détails, modifie l'image (détruit le texte)
+    """
     headers = {
         'x-freepik-api-key': api_key,
         'Content-Type': 'application/json'
@@ -450,17 +465,28 @@ def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5
     # Convertir l'image en Base64
     image_base64 = base64.b64encode(image_data).decode('utf-8')
     
-    # Construire le payload JSON
-    # creativity doit être un entier entre 0 et 10
-    payload = {
-        'image': image_base64,
-        'scale': scale,
-        'prompt': prompt if prompt else 'upscale',
-        'creativity': int(creativity * 10)  # Convertir 0.5 -> 5
-    }
+    # Choisir l'endpoint selon le mode
+    if mode == 'precision':
+        api_url = FREEPIK_PRECISION_URL
+        # Payload pour Precision (plus simple, pas de creativity/prompt)
+        payload = {
+            'image': image_base64,
+            'scale': scale
+        }
+        print(f"  → Mode PRECISION (préserve le texte)")
+    else:
+        api_url = FREEPIK_API_URL
+        # Payload pour Creative
+        payload = {
+            'image': image_base64,
+            'scale': scale,
+            'prompt': prompt if prompt else 'upscale',
+            'creativity': int(creativity * 10)  # Convertir 0.5 -> 5
+        }
+        print(f"  → Mode CREATIVE (modifie l'image)")
     
     response = requests.post(
-        FREEPIK_API_URL,
+        api_url,
         headers=headers,
         json=payload,
         timeout=120
@@ -562,6 +588,7 @@ def upscale_images():
         max_width = request.form.get('maxWidth')
         max_width = int(max_width) if max_width else None
         api_key = request.form.get('apiKey')
+        mode = request.form.get('mode', 'precision')  # 'precision' ou 'creative'
         
         if not api_key:
             return jsonify({'success': False, 'error': 'Clé API Freepik requise'}), 400
@@ -579,7 +606,7 @@ def upscale_images():
                 original_dims = f"{img_temp.width}x{img_temp.height}"
                 
                 # Étape 1: Upscale via Freepik
-                upscaled_data, api_info = call_freepik_upscale(original_data, api_key, scale_factor)
+                upscaled_data, api_info = call_freepik_upscale(original_data, api_key, scale_factor, mode=mode)
                 
                 # Étape 2: Conversion WebP
                 webp_data, final_size = convert_to_webp(upscaled_data, quality, max_width)
