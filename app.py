@@ -451,12 +451,12 @@ def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5
     image_base64 = base64.b64encode(image_data).decode('utf-8')
     
     # Construire le payload JSON
-    # creativity doit être un entier entre 0 et 100
+    # creativity doit être un entier entre 0 et 10
     payload = {
         'image': image_base64,
         'scale': scale,
         'prompt': prompt if prompt else 'upscale',
-        'creativity': int(creativity * 100)  # Convertir 0.5 -> 50
+        'creativity': int(creativity * 10)  # Convertir 0.5 -> 5
     }
     
     response = requests.post(
