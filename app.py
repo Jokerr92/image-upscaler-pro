@@ -442,22 +442,24 @@ def convert_to_webp(image_data, quality=85, max_width=None):
 def call_freepik_upscale(image_data, api_key, scale=2):
     """Appelle l'API Freepik pour upscaler une image"""
     headers = {
-        'x-freepik-api-key': api_key
+        'x-freepik-api-key': api_key,
+        'Accept': 'application/json'
     }
     
     files = {
         'image': ('image.jpg', io.BytesIO(image_data), 'image/jpeg')
     }
     
-    data = {
-        'scale': str(scale)
+    # Envoyer scale comme paramètre URL
+    params = {
+        'scale': scale
     }
     
     response = requests.post(
         FREEPIK_API_URL,
         headers=headers,
         files=files,
-        data=data,
+        params=params,
         timeout=120
     )
     
