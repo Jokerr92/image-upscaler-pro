@@ -500,13 +500,14 @@ def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5
     # L'API Freepik/Magnific est asynchrone - retourne un task_id dans 'data'
     if 'data' in result and 'task_id' in result['data']:
         task_id = result['data']['task_id']
-        # Attendre et poll le résultat
-        return poll_task_result(task_id, api_key)
+        # Attendre et poll le résultat - utiliser la bonne URL selon le mode
+        status_url = FREEPIK_PRECISION_URL if mode == 'precision' else FREEPIK_API_URL
+        return poll_task_result(task_id, api_key, status_url)
     else:
         raise Exception(f"Unexpected API response: {result}")
 
 
-def poll_task_result(task_id, api_key, max_attempts=60, delay=3):
+def poll_task_result(task_id, api_key, api_url, max_attempts=60, delay=3):
     """Poll le statut de la tâche jusqu'à completion"""
     headers = {
         'x-freepik-api-key': api_key
@@ -514,22 +515,27 @@ def poll_task_result(task_id, api_key, max_attempts=60, delay=3):
     
     for attempt in range(max_attempts):
         response = requests.get(
-            f"{FREEPIK_API_URL}/{task_id}",
+            f"{api_url}/{task_id}",
             headers=headers,
             timeout=30
         )
         
         if response.status_code == 200:
             result = response.json()
+            data = result.get('data', {})
+            
             # Le statut peut être dans result.status ou result.data.status
-            status = (result.get('status') or result.get('data', {}).get('status', '')).upper()
+            status_raw = result.get('status') or data.get('status', '')
+            status = status_raw.upper()
             
-            print(f"  → Poll {attempt+1}/{max_attempts}: status = {status}")
+            print(f"  → Poll {attempt+1}/{max_attempts}: status = {status_raw}")
+            print(f"    Réponse: {list(result.keys())}")
+            if data:
+                print(f"    Data: {list(data.keys())}")
             
-            if status == 'COMPLETED':
-                # Télécharger l'image upscalée
+            # Gérer différents statuts de completion
+            if status in ('COMPLETED', 'SUCCESS', 'DONE', 'FINISHED'):
                 # Chercher l'URL dans différents emplacements possibles
-                data = result.get('data', {})
                 image_url = None
                 
                 # Essayer différents emplacements possibles pour l'URL
@@ -553,12 +559,11 @@ def poll_task_result(task_id, api_key, max_attempts=60, delay=3):
                         raise Exception(f"Failed to download image: {img_response.status_code}")
                 
                 # Debug: afficher la structure reçue
-                print(f"  ⚠️ Structure reçue: {list(data.keys())}")
-                raise Exception(f"Result URL not found. Keys: {list(data.keys())}")
-            elif status == 'FAILED':
-                error_msg = result.get('error') or result.get('data', {}).get('error', 'Unknown error')
+                raise Exception(f"Result URL not found. Keys in data: {list(data.keys())}")
+            elif status in ('FAILED', 'ERROR', 'CANCELLED'):
+                error_msg = result.get('error') or data.get('error', 'Unknown error')
                 raise Exception(f"Task failed: {error_msg}")
-            # Sinon CREATED, PENDING, PROCESSING → continuer à poll
+            # Sinon CREATED, PENDING, PROCESSING, RUNNING → continuer à poll
         
         time.sleep(delay)
     
