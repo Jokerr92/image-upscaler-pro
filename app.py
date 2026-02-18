@@ -496,9 +496,11 @@ def poll_task_result(task_id, api_key, max_attempts=30, delay=2):
         if response.status_code == 200:
             result = response.json()
             # Le statut peut être dans result.status ou result.data.status
-            status = result.get('status') or result.get('data', {}).get('status', '').upper()
+            status = (result.get('status') or result.get('data', {}).get('status', '')).upper()
             
-            if status in ('COMPLETED', 'COMPLETED'):
+            print(f"  → Poll {attempt+1}/{max_attempts}: status = {status}")
+            
+            if status == 'COMPLETED':
                 # Télécharger l'image upscalée
                 data = result.get('data', {})
                 if 'url' in data:
@@ -507,9 +509,10 @@ def poll_task_result(task_id, api_key, max_attempts=30, delay=2):
                     if img_response.status_code == 200:
                         return img_response.content, data
                 raise Exception("Result URL not found")
-            elif status in ('FAILED', 'FAILED'):
+            elif status == 'FAILED':
                 error_msg = result.get('error') or result.get('data', {}).get('error', 'Unknown error')
                 raise Exception(f"Task failed: {error_msg}")
+            # Sinon CREATED, PENDING, PROCESSING → continuer à poll
         
         time.sleep(delay)
     
