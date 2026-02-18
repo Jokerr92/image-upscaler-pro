@@ -23,7 +23,7 @@ OUTPUT_FOLDER = 'outputs'
 FREEPIK_API_KEY = os.getenv('FREEPIK_API_KEY', 'TA_CLE_API_ICI')
 # URLs API Freepik
 FREEPIK_API_URL = 'https://api.freepik.com/v1/ai/image-upscaler'
-FREEPIK_PRECISION_URL = 'https://api.freepik.com/v1/ai/upscaler/precision'
+FREEPIK_PRECISION_URL = 'https://api.freepik.com/v1/ai/image-upscaler-precision'
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
