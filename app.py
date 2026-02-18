@@ -502,13 +502,33 @@ def poll_task_result(task_id, api_key, max_attempts=30, delay=2):
             
             if status == 'COMPLETED':
                 # Télécharger l'image upscalée
+                # Chercher l'URL dans différents emplacements possibles
                 data = result.get('data', {})
+                image_url = None
+                
+                # Essayer différents emplacements possibles pour l'URL
                 if 'url' in data:
                     image_url = data['url']
+                elif 'generated' in data and len(data['generated']) > 0:
+                    image_url = data['generated'][0]
+                elif 'image_url' in data:
+                    image_url = data['image_url']
+                elif 'output_url' in data:
+                    image_url = data['output_url']
+                elif 'result' in result and 'url' in result['result']:
+                    image_url = result['result']['url']
+                
+                if image_url:
+                    print(f"  → Téléchargement de l'image: {image_url[:50]}...")
                     img_response = requests.get(image_url, timeout=60)
                     if img_response.status_code == 200:
                         return img_response.content, data
-                raise Exception("Result URL not found")
+                    else:
+                        raise Exception(f"Failed to download image: {img_response.status_code}")
+                
+                # Debug: afficher la structure reçue
+                print(f"  ⚠️ Structure reçue: {list(data.keys())}")
+                raise Exception(f"Result URL not found. Keys: {list(data.keys())}")
             elif status == 'FAILED':
                 error_msg = result.get('error') or result.get('data', {}).get('error', 'Unknown error')
                 raise Exception(f"Task failed: {error_msg}")
