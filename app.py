@@ -7,6 +7,7 @@ Upscale via Freepik API + Conversion WebP
 import os
 import io
 import base64
+import time
 import requests
 from PIL import Image
 from flask import Flask, request, jsonify, send_file, render_template_string
@@ -439,27 +440,28 @@ def convert_to_webp(image_data, quality=85, max_width=None):
     return output.getvalue(), img.size
 
 
-def call_freepik_upscale(image_data, api_key, scale=2):
-    """Appelle l'API Freepik pour upscaler une image"""
+def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5):
+    """Appelle l'API Freepik/Magnific pour upscaler une image"""
     headers = {
-        'Authorization': f'Bearer {api_key}',
-        'Accept': 'application/json'
+        'x-freepik-api-key': api_key,
+        'Content-Type': 'application/json'
     }
     
-    files = {
-        'image': ('image.jpg', io.BytesIO(image_data), 'image/jpeg')
-    }
+    # Convertir l'image en Base64
+    image_base64 = base64.b64encode(image_data).decode('utf-8')
     
-    # Envoyer scale comme paramètre URL
-    params = {
-        'scale': scale
+    # Construire le payload JSON
+    payload = {
+        'image': image_base64,
+        'scale': scale,
+        'prompt': prompt if prompt else 'upscale',
+        'creativity': creativity
     }
     
     response = requests.post(
         FREEPIK_API_URL,
         headers=headers,
-        files=files,
-        params=params,
+        json=payload,
         timeout=120
     )
     
@@ -468,17 +470,45 @@ def call_freepik_upscale(image_data, api_key, scale=2):
     
     result = response.json()
     
-    # Freepik retourne une URL à télécharger
-    if 'data' in result and 'url' in result['data']:
-        image_url = result['data']['url']
-        # Télécharger l'image upscalée
-        img_response = requests.get(image_url, timeout=60)
-        if img_response.status_code == 200:
-            return img_response.content, result['data']
-        else:
-            raise Exception(f"Failed to download upscaled image: {img_response.status_code}")
+    # L'API Freepik/Magnific est asynchrone - retourne un task_id
+    if 'task_id' in result:
+        task_id = result['task_id']
+        # Attendre et poll le résultat
+        return poll_task_result(task_id, api_key)
     else:
         raise Exception(f"Unexpected API response: {result}")
+
+
+def poll_task_result(task_id, api_key, max_attempts=30, delay=2):
+    """Poll le statut de la tâche jusqu'à completion"""
+    headers = {
+        'x-freepik-api-key': api_key
+    }
+    
+    for attempt in range(max_attempts):
+        response = requests.get(
+            f"{FREEPIK_API_URL}/{task_id}",
+            headers=headers,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            if result.get('status') == 'completed':
+                # Télécharger l'image upscalée
+                if 'data' in result and 'url' in result['data']:
+                    image_url = result['data']['url']
+                    img_response = requests.get(image_url, timeout=60)
+                    if img_response.status_code == 200:
+                        return img_response.content, result['data']
+                raise Exception("Result URL not found")
+            elif result.get('status') == 'failed':
+                raise Exception(f"Task failed: {result.get('error', 'Unknown error')}")
+        
+        time.sleep(delay)
+    
+    raise Exception("Task timeout - took too long to complete")
 
 
 @app.route('/')
