@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Image Upscaler - Backend Python
-Upscale via Freepik API + Conversion WebP
+Image Upscaler Pro - Real-ESRGAN Version
+Upscale local avec Real-ESRGAN + Conversion WebP
+100% offline, gratuit, préserve le texte
 """
 
 import os
@@ -14,19 +15,76 @@ from flask import Flask, request, jsonify, send_file, render_template_string
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
+# Essayer d'importer Real-ESRGAN
+try:
+    import torch
+    from realesrgan import RealESRGANer
+    from basicsr.archs.rrdbnet_arch import RRDBNet
+    REALESRGAN_AVAILABLE = True
+except ImportError:
+    REALESRGAN_AVAILABLE = False
+    print("⚠️ Real-ESRGAN non installé. Utilisez 'pip install realesrgan'")
+
 app = Flask(__name__)
 CORS(app)
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'outputs'
-FREEPIK_API_KEY = os.getenv('FREEPIK_API_KEY', 'TA_CLE_API_ICI')
-# URLs API Freepik
-FREEPIK_API_URL = 'https://api.freepik.com/v1/ai/image-upscaler'
-FREEPIK_PRECISION_URL = 'https://api.freepik.com/v1/ai/image-upscaler-precision'
+MODELS_FOLDER = 'models'
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+os.makedirs(MODELS_FOLDER, exist_ok=True)
+
+# Initialiser Real-ESRGAN
+upsampler = None
+
+def init_realesrgan():
+    """Initialise le modèle Real-ESRGAN"""
+    global upsampler
+    
+    if not REALESRGAN_AVAILABLE:
+        return False
+    
+    if upsampler is not None:
+        return True
+    
+    try:
+        # Vérifier si CUDA est disponible
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"🖥️  Device utilisé: {device}")
+        
+        # Chemin du modèle
+        model_path = os.path.join(MODELS_FOLDER, 'RealESRGAN_x4plus.pth')
+        
+        # Télécharger le modèle s'il n'existe pas
+        if not os.path.exists(model_path):
+            print("📥 Téléchargement du modèle Real-ESRGAN...")
+            url = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth'
+            r = requests.get(url, timeout=120)
+            with open(model_path, 'wb') as f:
+                f.write(r.content)
+            print("✅ Modèle téléchargé")
+        
+        # Créer l'upsampler
+        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+        upsampler = RealESRGANer(
+            scale=4,
+            model_path=model_path,
+            model=model,
+            tile=0,
+            tile_pad=10,
+            pre_pad=0,
+            half=torch.cuda.is_available(),  # half precision si CUDA
+            device=device
+        )
+        print("✅ Real-ESRGAN initialisé")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erreur initialisation Real-ESRGAN: {e}")
+        return False
 
 # Page HTML intégrée (interface simple)
 HTML_INTERFACE = '''
@@ -35,7 +93,7 @@ HTML_INTERFACE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎨 Upscale Images Pro</title>
+    <title>🎨 Upscale Images Pro - Real-ESRGAN</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -57,21 +115,15 @@ HTML_INTERFACE = '''
         }
         h1 { text-align: center; color: #333; margin-bottom: 10px; }
         .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
-        .api-key-section { 
-            background: #fff3cd; 
-            border: 1px solid #ffc107; 
-            border-radius: 10px; 
-            padding: 15px; 
-            margin-bottom: 25px; 
+        .info-box {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 25px;
+            color: #155724;
         }
-        .api-key-section input {
-            width: 100%;
-            padding: 10px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            margin-top: 8px;
-            font-size: 14px;
-        }
+        .info-box strong { color: #28a745; }
         .drop-zone { 
             border: 3px dashed #667eea; 
             border-radius: 15px; 
@@ -161,6 +213,7 @@ HTML_INTERFACE = '''
             margin-bottom: 10px; 
             border: 1px solid #c3e6cb; 
         }
+        .result-item.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
         .result-preview { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; margin-right: 15px; }
         .result-info { flex: 1; }
         .result-name { font-weight: 600; color: #155724; margin-bottom: 5px; }
@@ -174,7 +227,7 @@ HTML_INTERFACE = '''
             font-size: 13px;
             font-weight: 600;
         }
-        .error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+        .download-btn:hover { background: #218838; }
         .spinner {
             display: inline-block;
             width: 20px;
@@ -191,11 +244,12 @@ HTML_INTERFACE = '''
 <body>
     <div class="container">
         <h1>🎨 Upscale Images Pro</h1>
-        <p class="subtitle">Améliorez vos photos avec Freepik AI + WebP optimisé</p>
+        <p class="subtitle">Real-ESRGAN - 100% Offline - Préserve le texte</p>
         
-        <div class="api-key-section">
-            <label>🔑 Clé API Freepik</label>
-            <input type="password" id="apiKey" placeholder="Entrez votre clé API Freepik...">
+        <div class="info-box">
+            <strong>✅ Mode offline activé</strong><br>
+            Real-ESRGAN fonctionne sans internet. Vos images restent sur votre PC.<br>
+            <small>Le modèle sera téléchargé automatiquement (64 MB) au premier lancement.</small>
         </div>
 
         <div class="drop-zone" id="dropZone">
@@ -217,13 +271,6 @@ HTML_INTERFACE = '''
                 </select>
             </div>
             <div class="option-group">
-                <label>🎨 Mode d'upscale</label>
-                <select id="mode">
-                    <option value="precision" selected>🔒 Precision (préserve le texte)</option>
-                    <option value="creative">✨ Creative (ajoute des détails)</option>
-                </select>
-            </div>
-            <div class="option-group">
                 <label>🖼️ Qualité WebP (compression)</label>
                 <select id="quality">
                     <option value="80">80% (Fichier léger)</option>
@@ -231,10 +278,6 @@ HTML_INTERFACE = '''
                     <option value="90">90% (Haute qualité)</option>
                     <option value="95">95% (Qualité maximale)</option>
                 </select>
-            </div>
-            <div class="option-group">
-                <label>📐 Largeur max (px, optionnel)</label>
-                <input type="number" id="maxWidth" placeholder="ex: 2000 (laissez vide pour auto)">
             </div>
         </div>
         
@@ -292,11 +335,6 @@ HTML_INTERFACE = '''
             files.forEach((file, index) => {
                 const item = document.createElement('div');
                 item.className = 'file-item';
-                
-                const img = document.createElement('img');
-                img.className = 'file-preview';
-                img.src = URL.createObjectURL(file);
-                
                 item.innerHTML = `
                     <img class="file-preview" src="${URL.createObjectURL(file)}">
                     <div class="file-info">
@@ -326,13 +364,6 @@ HTML_INTERFACE = '''
         processBtn.addEventListener('click', async () => {
             if (files.length === 0) return;
             
-            const apiKey = document.getElementById('apiKey').value.trim();
-            if (!apiKey) {
-                alert('⚠️ Veuillez entrer votre clé API Freepik');
-                document.getElementById('apiKey').focus();
-                return;
-            }
-            
             progress.classList.add('active');
             results.classList.remove('active');
             processBtn.disabled = true;
@@ -341,15 +372,10 @@ HTML_INTERFACE = '''
             const formData = new FormData();
             files.forEach(file => formData.append('images', file));
             formData.append('scaleFactor', document.getElementById('scaleFactor').value);
-            formData.append('mode', document.getElementById('mode').value);
             formData.append('quality', document.getElementById('quality').value);
-            formData.append('apiKey', apiKey);
-            
-            const maxWidth = document.getElementById('maxWidth').value;
-            if (maxWidth) formData.append('maxWidth', maxWidth);
             
             try {
-                updateProgress(10, 'Upload des images...');
+                updateProgress(10, 'Upscaling avec Real-ESRGAN...');
                 
                 const response = await fetch('/upscale', {
                     method: 'POST',
@@ -450,138 +476,46 @@ def convert_to_webp(image_data, quality=85, max_width=None):
     return output.getvalue(), img.size
 
 
-def call_freepik_upscale(image_data, api_key, scale=2, prompt="", creativity=0.5, mode='precision'):
-    """Appelle l'API Freepik/Magnific pour upscaler une image
+def upscale_with_realesrgan(image_data, scale=2):
+    """Upscale une image avec Real-ESRGAN"""
+    if not REALESRGAN_AVAILABLE:
+        raise Exception("Real-ESRGAN n'est pas installé. Exécutez: pip install realesrgan")
     
-    Modes:
-    - 'precision': Préserve le texte, fidélité maximale (RECOMMANDÉ pour photos produit)
-    - 'creative': Ajoute des détails, modifie l'image (détruit le texte)
-    """
-    headers = {
-        'x-freepik-api-key': api_key,
-        'Content-Type': 'application/json'
-    }
+    # Initialiser si besoin
+    if not init_realesrgan():
+        raise Exception("Impossible d'initialiser Real-ESRGAN")
     
-    # Convertir l'image en Base64
-    image_base64 = base64.b64encode(image_data).decode('utf-8')
+    # Charger l'image
+    img = Image.open(io.BytesIO(image_data))
     
-    # Choisir l'endpoint selon le mode
-    if mode == 'precision':
-        api_url = FREEPIK_PRECISION_URL
-        # Payload pour Precision (plus simple, pas de creativity/prompt)
-        payload = {
-            'image': image_base64,
-            'scale': scale
-        }
-        print(f"  → Mode PRECISION (préserve le texte)")
-    else:
-        api_url = FREEPIK_API_URL
-        # Payload pour Creative
-        payload = {
-            'image': image_base64,
-            'scale': scale,
-            'prompt': prompt if prompt else 'upscale',
-            'creativity': int(creativity * 10)  # Convertir 0.5 -> 5
-        }
-        print(f"  → Mode CREATIVE (modifie l'image)")
+    # Convertir en RGB si nécessaire
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
     
-    response = requests.post(
-        api_url,
-        headers=headers,
-        json=payload,
-        timeout=120
-    )
+    # Convertir en numpy array
+    import numpy as np
+    img_array = np.array(img)
     
-    if response.status_code != 200:
-        raise Exception(f"API Error {response.status_code}: {response.text}")
+    # Upscaling
+    print(f"  → Upscaling {img.width}x{img.height} → {img.width*scale}x{img.height*scale}...")
     
-    result = response.json()
+    # Pour le scale 2, on fait 4 puis on réduit
+    output, _ = upsampler.enhance(img_array, outscale=4)
     
-    # L'API Freepik/Magnific est asynchrone - retourne un task_id dans 'data'
-    if 'data' in result and 'task_id' in result['data']:
-        task_id = result['data']['task_id']
-        # Attendre et poll le résultat - utiliser la bonne URL selon le mode
-        status_url = FREEPIK_PRECISION_URL if mode == 'precision' else FREEPIK_API_URL
-        return poll_task_result(task_id, api_key, status_url)
-    else:
-        raise Exception(f"Unexpected API response: {result}")
-
-
-def poll_task_result(task_id, api_key, api_url, max_attempts=60, delay=3):
-    """Poll le statut de la tâche jusqu'à completion"""
-    headers = {
-        'x-freepik-api-key': api_key
-    }
+    # Si on veut du 2x au lieu de 4x, on réduit
+    if scale == 2:
+        h, w = output.shape[:2]
+        output_img = Image.fromarray(output)
+        output_img = output_img.resize((w//2, h//2), Image.Resampling.LANCZOS)
+        output = np.array(output_img)
     
-    for attempt in range(max_attempts):
-        response = requests.get(
-            f"{api_url}/{task_id}",
-            headers=headers,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            data = result.get('data', {})
-            
-            # Le statut peut être dans result.status ou result.data.status
-            status_raw = result.get('status') or data.get('status', '')
-            status = status_raw.upper()
-            
-            print(f"  → Poll {attempt+1}/{max_attempts}: status = {status_raw}")
-            print(f"    Réponse: {list(result.keys())}")
-            if data:
-                print(f"    Data: {list(data.keys())}")
-            
-            # Gérer différents statuts de completion
-            if status in ('COMPLETED', 'SUCCESS', 'DONE', 'FINISHED'):
-                # Debug: voir tout le contenu de data
-                print(f"    DEBUG data: {data}")
-                
-                # Chercher l'URL dans différents emplacements possibles
-                image_url = None
-                
-                # Vérifier data.generated (liste d'URLs)
-                if 'generated' in data:
-                    generated = data['generated']
-                    print(f"    DEBUG data.generated: {generated}")
-                    if isinstance(generated, list) and len(generated) > 0:
-                        image_url = generated[0]
-                        print(f"    ✓ URL trouvée dans data.generated[0]: {image_url[:50]}...")
-                    elif isinstance(generated, str):
-                        image_url = generated
-                        print(f"    ✓ URL trouvée dans data.generated (str): {image_url[:50]}...")
-                
-                # Si pas trouvé, essayer les autres emplacements
-                if not image_url:
-                    if 'url' in data:
-                        image_url = data['url']
-                        print(f"    ✓ URL trouvée dans data.url")
-                    elif 'image_url' in data:
-                        image_url = data['image_url']
-                        print(f"    ✓ URL trouvée dans data.image_url")
-                    elif 'output_url' in data:
-                        image_url = data['output_url']
-                        print(f"    ✓ URL trouvée dans data.output_url")
-                
-                if image_url:
-                    print(f"  → Téléchargement de l'image...")
-                    img_response = requests.get(image_url, timeout=60)
-                    if img_response.status_code == 200:
-                        return img_response.content, data
-                    else:
-                        raise Exception(f"Failed to download image: {img_response.status_code}")
-                
-                # Debug: afficher la structure reçue
-                raise Exception(f"Result URL not found. Data: {data}")
-            elif status in ('FAILED', 'ERROR', 'CANCELLED'):
-                error_msg = result.get('error') or data.get('error', 'Unknown error')
-                raise Exception(f"Task failed: {error_msg}")
-            # Sinon CREATED, PENDING, PROCESSING, RUNNING → continuer à poll
-        
-        time.sleep(delay)
+    # Convertir en bytes
+    output_img = Image.fromarray(output)
+    output_bytes = io.BytesIO()
+    output_img.save(output_bytes, format='PNG')
+    output_bytes.seek(0)
     
-    raise Exception("Task timeout - took too long to complete")
+    return output_bytes.getvalue(), output_img.size
 
 
 @app.route('/')
@@ -604,13 +538,6 @@ def upscale_images():
         # Paramètres
         scale_factor = int(request.form.get('scaleFactor', 2))
         quality = int(request.form.get('quality', 85))
-        max_width = request.form.get('maxWidth')
-        max_width = int(max_width) if max_width else None
-        api_key = request.form.get('apiKey')
-        mode = request.form.get('mode', 'precision')  # 'precision' ou 'creative'
-        
-        if not api_key:
-            return jsonify({'success': False, 'error': 'Clé API Freepik requise'}), 400
         
         results = []
         
@@ -624,11 +551,12 @@ def upscale_images():
                 img_temp = Image.open(io.BytesIO(original_data))
                 original_dims = f"{img_temp.width}x{img_temp.height}"
                 
-                # Étape 1: Upscale via Freepik
-                upscaled_data, api_info = call_freepik_upscale(original_data, api_key, scale_factor, mode=mode)
+                # Étape 1: Upscale avec Real-ESRGAN
+                print(f"🖼️  Traitement de {original_name}...")
+                upscaled_data, (upscaled_w, upscaled_h) = upscale_with_realesrgan(original_data, scale_factor)
                 
                 # Étape 2: Conversion WebP
-                webp_data, final_size = convert_to_webp(upscaled_data, quality, max_width)
+                webp_data, final_size = convert_to_webp(upscaled_data, quality)
                 
                 # Sauvegarder le fichier
                 output_filename = f"upscaled_{original_name.rsplit('.', 1)[0]}.webp"
@@ -649,7 +577,10 @@ def upscale_images():
                     'preview_url': f'/preview/{output_filename}'
                 })
                 
+                print(f"  ✅ Terminé: {output_filename}")
+                
             except Exception as e:
+                print(f"  ❌ Erreur sur {file.filename}: {e}")
                 results.append({
                     'success': False,
                     'original_name': file.filename,
@@ -692,12 +623,19 @@ def format_bytes(bytes_value):
 
 
 if __name__ == '__main__':
-    print("🎨 Image Upscaler Pro - Démarrage...")
+    print("🎨 Image Upscaler Pro - Real-ESRGAN")
     print("📁 Uploads:", os.path.abspath(UPLOAD_FOLDER))
     print("📁 Outputs:", os.path.abspath(OUTPUT_FOLDER))
     print("")
-    print("🌐 Interface web: http://localhost:5000")
-    print("✨ Ouvrez votre navigateur et allez sur http://localhost:5000")
-    print("")
+    
+    # Vérifier Real-ESRGAN au démarrage
+    if REALESRGAN_AVAILABLE:
+        print("✅ Real-ESRGAN disponible")
+        print("🌐 Interface web: http://localhost:5000")
+        print("")
+    else:
+        print("⚠️  Real-ESRGAN non installé.")
+        print("   Exécutez: pip install realesrgan")
+        print("")
     
     app.run(host='0.0.0.0', port=5000, debug=True)
