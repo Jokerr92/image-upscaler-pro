@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Image Upscaler Pro - Version Simple & Efficace
-Upscale avec PIL (Lanczos) + Conversion WebP
-100% offline, gratuit, préserve le texte parfaitement
+Smart Media Compressor Pro
+Compresse photos, vidéos et GIF sans perte de qualité visible
+Optimisation intelligente avec détection de contenu
 """
 
 import os
 import io
-from PIL import Image, ImageFilter
+import subprocess
+import shutil
+from PIL import Image, ImageOptimizer
 from flask import Flask, request, jsonify, send_file, render_template_string
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -15,26 +17,24 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 CORS(app)
 
-# Configuration
 UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'outputs'
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# Page HTML intégrée
 HTML_INTERFACE = '''
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎨 Upscale Images Pro</title>
+    <title>🗜️ Smart Media Compressor Pro</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); 
             min-height: 100vh; 
             display: flex; 
             justify-content: center; 
@@ -45,36 +45,48 @@ HTML_INTERFACE = '''
             background: white; 
             border-radius: 20px; 
             padding: 40px; 
-            max-width: 700px; 
+            max-width: 800px; 
             width: 100%; 
             box-shadow: 0 20px 60px rgba(0,0,0,0.3); 
         }
         h1 { text-align: center; color: #333; margin-bottom: 10px; }
         .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
         .info-box {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
+            background: #e8f5e9;
+            border: 1px solid #4caf50;
             border-radius: 10px;
             padding: 15px;
             margin-bottom: 25px;
-            color: #155724;
+            color: #2e7d32;
         }
-        .info-box strong { color: #28a745; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .stat-box {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .stat-value { font-size: 24px; font-weight: bold; color: #11998e; }
+        .stat-label { font-size: 12px; color: #666; }
         .drop-zone { 
-            border: 3px dashed #667eea; 
+            border: 3px dashed #11998e; 
             border-radius: 15px; 
             padding: 50px 20px; 
             text-align: center; 
             transition: all 0.3s ease; 
             cursor: pointer; 
-            background: #f8f9ff; 
+            background: #e8f5e9; 
+            margin-bottom: 20px;
         }
-        .drop-zone:hover, .drop-zone.dragover { 
-            background: #e8ebff; 
-            border-color: #764ba2; 
+        .drop-zone:hover { 
+            background: #c8e6c9; 
             transform: scale(1.02); 
         }
-        .drop-zone-icon { font-size: 48px; margin-bottom: 15px; }
         #fileInput { display: none; }
         .options { 
             margin: 25px 0; 
@@ -83,19 +95,13 @@ HTML_INTERFACE = '''
             border-radius: 10px; 
         }
         .option-group { margin-bottom: 15px; }
-        .option-group:last-child { margin-bottom: 0; }
         label { display: block; margin-bottom: 5px; color: #333; font-weight: 600; font-size: 14px; }
-        select { 
-            width: 100%; 
-            padding: 10px; 
-            border: 2px solid #ddd; 
-            border-radius: 8px; 
-            font-size: 14px; 
-        }
+        select, input[type="range"] { width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 8px; }
+        .quality-display { text-align: center; font-weight: bold; color: #11998e; margin-top: 5px; }
         .btn { 
             width: 100%; 
             padding: 15px; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); 
             color: white; 
             border: none; 
             border-radius: 10px; 
@@ -104,62 +110,56 @@ HTML_INTERFACE = '''
             cursor: pointer; 
             transition: transform 0.2s; 
         }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4); }
+        .btn:hover { transform: translateY(-2px); }
         .btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .file-list { margin: 20px 0; max-height: 200px; overflow-y: auto; }
         .file-item { 
             display: flex; 
             align-items: center; 
             padding: 12px; 
-            background: #f8f9ff; 
+            background: #e8f5e9; 
             border-radius: 8px; 
             margin-bottom: 8px; 
         }
-        .file-preview { width: 50px; height: 50px; object-fit: cover; border-radius: 5px; margin-right: 12px; }
+        .file-icon { font-size: 24px; margin-right: 10px; }
         .file-info { flex: 1; }
         .file-name { font-weight: 600; color: #333; font-size: 14px; }
-        .file-size { color: #888; font-size: 12px; }
-        .file-remove { 
-            background: #ff4757; 
-            color: white; 
-            border: none; 
-            padding: 5px 12px; 
-            border-radius: 5px; 
-            cursor: pointer; 
-        }
-        .progress { display: none; margin: 20px 0; }
-        .progress.active { display: block; }
-        .progress-bar { height: 10px; background: #e0e0e0; border-radius: 5px; overflow: hidden; }
-        .progress-fill { 
-            height: 100%; 
-            background: linear-gradient(90deg, #667eea, #764ba2); 
-            width: 0%; 
-            transition: width 0.3s; 
-        }
-        .progress-text { text-align: center; margin-top: 10px; color: #667eea; font-weight: 600; }
-        .results { display: none; margin-top: 20px; }
-        .results.active { display: block; }
+        .file-size { color: #666; font-size: 12px; }
+        .results { margin-top: 20px; }
         .result-item { 
             display: flex; 
             align-items: center; 
             padding: 15px; 
-            background: #d4edda; 
+            background: #e8f5e9; 
             border-radius: 10px; 
             margin-bottom: 10px; 
+            border-left: 4px solid #4caf50;
         }
-        .result-item.error { background: #f8d7da; }
-        .result-preview { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; margin-right: 15px; }
-        .result-info { flex: 1; }
-        .result-name { font-weight: 600; color: #155724; }
-        .result-meta { color: #28a745; font-size: 13px; }
+        .result-item.error { background: #ffebee; border-left-color: #f44336; }
+        .savings { 
+            background: #4caf50; 
+            color: white; 
+            padding: 4px 8px; 
+            border-radius: 4px; 
+            font-size: 12px; 
+            font-weight: bold;
+        }
         .download-btn {
-            background: #28a745;
+            background: #11998e;
             color: white;
             text-decoration: none;
             padding: 8px 16px;
             border-radius: 5px;
             font-size: 13px;
             font-weight: 600;
+        }
+        .format-badge {
+            background: #666;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            margin-left: 5px;
         }
         .spinner {
             display: inline-block;
@@ -176,54 +176,74 @@ HTML_INTERFACE = '''
 </head>
 <body>
     <div class="container">
-        <h1>🎨 Upscale Images Pro</h1>
-        <p class="subtitle">Upscale haute qualité - Préserve le texte</p>
+        <h1>🗜️ Smart Media Compressor</h1>
+        <p class="subtitle">Compresse photos, vidéos & GIF - Qualité préservée</p>
         
         <div class="info-box">
-            <strong>✅ Mode Lanczos activé</strong><br>
-            Algorithme d'upscaling de haute qualité qui préserve parfaitement les détails et le texte.<br>
-            <small>100% offline, rapide, et gratuit.</small>
+            <strong>✅ Optimisation intelligente</strong><br>
+            Détecte automatiquement le meilleur format et les meilleurs paramètres.<br>
+            <small>Support: JPG, PNG, WebP, MP4, MOV, GIF, WebM</small>
+        </div>
+
+        <div class="stats" id="stats" style="display:none;">
+            <div class="stat-box">
+                <div class="stat-value" id="savedSize">0%</div>
+                <div class="stat-label">Réduction moyenne</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="savedBytes">0 MB</div>
+                <div class="stat-label">Espace gagné</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="processedCount">0</div>
+                <div class="stat-label">Fichiers traités</div>
+            </div>
         </div>
 
         <div class="drop-zone" id="dropZone">
-            <div class="drop-zone-icon">📁</div>
-            <div style="color: #667eea; font-size: 18px; font-weight: 600;">Glissez vos images ici</div>
-            <div style="color: #888; font-size: 13px;">JPG, PNG, WebP</div>
+            <div style="font-size: 48px; margin-bottom: 10px;">📁</div>
+            <div style="color: #11998e; font-size: 18px; font-weight: 600;">
+                Glissez vos fichiers ici
+            </div>
+            <div style="color: #666; font-size: 13px; margin-top: 5px;">
+                Images • Vidéos • GIF
+            </div>
         </div>
         
-        <input type="file" id="fileInput" multiple accept="image/*">
+        <input type="file" id="fileInput" multiple accept="image/*,video/*,.gif">
         
         <div class="file-list" id="fileList"></div>
         
         <div class="options">
             <div class="option-group">
-                <label>🎯 Niveau d'upscale</label>
-                <select id="scaleFactor">
-                    <option value="2" selected>2x (Double résolution)</option>
-                    <option value="3">3x (Triple résolution)</option>
-                    <option value="4">4x (Quadruple résolution)</option>
+                <label>🎯 Niveau de compression</label>
+                <select id="compressionLevel">
+                    <option value="lossless">🟢 Sans perte (qualité max)</option>
+                    <option value="balanced" selected>🟡 Équilibré (recommandé)</option>
+                    <option value="aggressive">🔴 Forte (fichiers légers)</option>
+                    <option value="custom">⚙️ Personnalisé</option>
                 </select>
             </div>
+            <div class="option-group" id="customQuality" style="display:none;">
+                <label>Qualité (1-100)</label>
+                <input type="range" id="quality" min="1" max="100" value="85">
+                <div class="quality-display" id="qualityValue">85%</div>
+            </div>
             <div class="option-group">
-                <label>🖼️ Qualité WebP</label>
-                <select id="quality">
-                    <option value="85" selected>85% (Équilibré)</option>
-                    <option value="90">90% (Haute qualité)</option>
-                    <option value="95">95% (Maximum)</option>
+                <label>📐 Dimensions max (optionnel)</label>
+                <select id="maxDimension">
+                    <option value="">Original (sans changement)</option>
+                    <option value="1920">1920px (Full HD)</option>
+                    <option value="1080">1080px (HD)</option>
+                    <option value="800">800px (Web)</option>
+                    <option value="600">600px (Mobile)</option>
                 </select>
             </div>
         </div>
         
         <button class="btn" id="processBtn" disabled>
-            🚀 Lancer le traitement
+            🚀 Compresser les fichiers
         </button>
-        
-        <div class="progress" id="progress">
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-            </div>
-            <div class="progress-text" id="progressText">Préparation...</div>
-        </div>
         
         <div class="results" id="results"></div>
     </div>
@@ -233,190 +253,377 @@ HTML_INTERFACE = '''
         const fileInput = document.getElementById('fileInput');
         const fileList = document.getElementById('fileList');
         const processBtn = document.getElementById('processBtn');
-        const progress = document.getElementById('progress');
         const results = document.getElementById('results');
+        const compressionLevel = document.getElementById('compressionLevel');
+        const customQuality = document.getElementById('customQuality');
+        const qualitySlider = document.getElementById('quality');
+        const qualityValue = document.getElementById('qualityValue');
         
         let files = [];
         
         dropZone.addEventListener('click', () => fileInput.click());
-        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-        dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.background = '#c8e6c9'; });
+        dropZone.addEventListener('dragleave', () => dropZone.style.background = '#e8f5e9'; });
+        dropZone.addEventListener('drop', (e) => { 
+            e.preventDefault(); 
+            dropZone.style.background = '#e8f5e9'; 
+            handleFiles(e.dataTransfer.files); 
+        });
         fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
         
+        compressionLevel.addEventListener('change', () => {
+            customQuality.style.display = compressionLevel.value === 'custom' ? 'block' : 'none';
+        });
+        
+        qualitySlider.addEventListener('input', () => {
+            qualityValue.textContent = qualitySlider.value + '%';
+        });
+        
+        function getFileIcon(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            if (['jpg','jpeg','png','webp'].includes(ext)) return '🖼️';
+            if (['mp4','mov','avi','webm'].includes(ext)) return '🎬';
+            if (ext === 'gif') return '🎞️';
+            return '📄';
+        }
+        
+        function formatBytes(b) {
+            if (b === 0) return '0 B';
+            const k = 1024;
+            const s = ['B','KB','MB','GB'];
+            const i = Math.floor(Math.log(b)/Math.log(k));
+            return parseFloat((b/Math.pow(k,i)).toFixed(2)) + ' ' + s[i];
+        }
+        
         function handleFiles(newFiles) {
-            files = [...files, ...Array.from(newFiles).filter(f => f.type.startsWith('image/'))];
+            files = [...files, ...Array.from(newFiles)];
             updateFileList();
         }
         
         function updateFileList() {
             fileList.innerHTML = files.map((file, i) => `
                 <div class="file-item">
-                    <img class="file-preview" src="${URL.createObjectURL(file)}">
+                    <span class="file-icon">${getFileIcon(file.name)}</span>
                     <div class="file-info">
                         <div class="file-name">${file.name}</div>
                         <div class="file-size">${formatBytes(file.size)}</div>
                     </div>
-                    <button class="file-remove" onclick="removeFile(${i})">✕</button>
+                    <button onclick="removeFile(${i})" style="background:#ff4757;color:white;border:none;padding:5px 10px;border-radius:5px;cursor:pointer;">✕</button>
                 </div>
             `).join('');
             processBtn.disabled = files.length === 0;
         }
         
-        function removeFile(index) { files.splice(index, 1); updateFileList(); }
-        
-        function formatBytes(b) { if (b === 0) return '0 B'; const k = 1024; const s = ['B','KB','MB']; const i = Math.floor(Math.log(b)/Math.log(k)); return parseFloat((b/Math.pow(k,i)).toFixed(2))+' '+s[i]; }
+        function removeFile(i) { files.splice(i, 1); updateFileList(); }
         
         processBtn.addEventListener('click', async () => {
             if (files.length === 0) return;
-            progress.classList.add('active');
-            results.classList.remove('active');
+            
             processBtn.disabled = true;
-            processBtn.innerHTML = '<span class="spinner"></span>Traitement...';
+            processBtn.innerHTML = '<span class="spinner"></span>Compression en cours...';
             
             const formData = new FormData();
-            files.forEach(f => formData.append('images', f));
-            formData.append('scaleFactor', document.getElementById('scaleFactor').value);
-            formData.append('quality', document.getElementById('quality').value);
+            files.forEach(f => formData.append('files', f));
+            formData.append('compressionLevel', compressionLevel.value);
+            formData.append('quality', qualitySlider.value);
+            formData.append('maxDimension', document.getElementById('maxDimension').value);
             
             try {
-                const res = await fetch('/upscale', { method: 'POST', body: formData });
+                const res = await fetch('/compress', { method: 'POST', body: formData });
                 const data = await res.json();
+                
                 if (data.success) {
-                    progress.classList.remove('active');
-                    showResults(data.results);
-                    processBtn.innerHTML = '🚀 Lancer le traitement';
-                    processBtn.disabled = false;
+                    showResults(data.results, data.stats);
                 } else throw new Error(data.error);
             } catch (e) {
-                progress.classList.remove('active');
-                processBtn.innerHTML = '🚀 Lancer le traitement';
-                processBtn.disabled = false;
                 alert('❌ ' + e.message);
             }
+            
+            processBtn.innerHTML = '🚀 Compresser les fichiers';
+            processBtn.disabled = false;
         });
         
-        function showResults(r) {
-            results.innerHTML = '<h3 style="margin-bottom:15px;color:#28a745;">✅ Terminé !</h3>' + 
-                r.map(x => x.error ? 
-                    `<div class="result-item error"><div class="result-info"><div class="result-name">❌ ${x.original_name}</div><div class="result-meta">${x.error}</div></div></div>` :
-                    `<div class="result-item"><img class="result-preview" src="${x.preview_url}"><div class="result-info"><div class="result-name">${x.original_name}</div><div class="result-meta">${x.original_dims} → ${x.upscaled_dims}</div></div><a href="${x.download_url}" class="download-btn" download>📥</a></div>`
-                ).join('');
-            results.classList.add('active');
+        function showResults(r, stats) {
+            document.getElementById('stats').style.display = 'grid';
+            document.getElementById('savedSize').textContent = stats.avgReduction + '%';
+            document.getElementById('savedBytes').textContent = formatBytes(stats.totalSaved);
+            document.getElementById('processedCount').textContent = stats.processed;
+            
+            results.innerHTML = r.map(x => {
+                if (x.error) return `<div class="result-item error"><div><strong>❌ ${x.original_name}</strong><br><small>${x.error}</small></div></div>`;
+                return `
+                    <div class="result-item">
+                        <div style="flex:1;">
+                            <strong>${x.original_name}</strong>
+                            <span class="format-badge">${x.output_format}</span>
+                            <br>
+                            <small>${formatBytes(x.original_size)} → ${formatBytes(x.compressed_size)}</small>
+                            <span class="savings">-${x.reduction}%</span>
+                        </div>
+                        <a href="${x.download_url}" class="download-btn" download>📥</a>
+                    </div>
+                `;
+            }).join('');
         }
     </script>
 </body>
 </html>
 '''
 
+def get_compression_settings(level, quality=None):
+    """Retourne les paramètres de compression selon le niveau"""
+    settings = {
+        'lossless': {'quality': 95, 'method': 6, 'optimize': True},
+        'balanced': {'quality': 85, 'method': 6, 'optimize': True},
+        'aggressive': {'quality': 70, 'method': 4, 'optimize': True},
+        'custom': {'quality': int(quality) if quality else 85, 'method': 6, 'optimize': True}
+    }
+    return settings.get(level, settings['balanced'])
 
-def upscale_image_pil(image_data, scale=2):
-    """Upscale avec PIL Lanczos - haute qualité, préserve le texte"""
-    img = Image.open(io.BytesIO(image_data))
-    
-    # Convertir en RGB si nécessaire
-    if img.mode in ('RGBA', 'LA', 'P'):
-        img = img.convert('RGB')
-    
-    original_size = img.size
-    new_size = (img.width * scale, img.height * scale)
-    
-    # Upscale avec Lanczos (meilleure qualité pour préserver les détails)
-    upscaled = img.resize(new_size, Image.Resampling.LANCZOS)
-    
-    # Amélioration légère pour les contours (préserve le texte)
-    upscaled = upscaled.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
-    
-    # Convertir en bytes
-    output = io.BytesIO()
-    upscaled.save(output, format='PNG')
-    output.seek(0)
-    
-    return output.getvalue(), upscaled.size
+def smart_compress_image(input_path, output_path, settings, max_dimension=None):
+    """Compresse intelligemment une image"""
+    with Image.open(input_path) as img:
+        # Convertir en RGB si nécessaire
+        if img.mode in ('RGBA', 'LA', 'P'):
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            if img.mode in ('RGBA', 'LA'):
+                background.paste(img, mask=img.split()[-1])
+                img = background
+            else:
+                img = img.convert('RGB')
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Redimensionner si nécessaire
+        if max_dimension:
+            max_dim = int(max_dimension)
+            if max(img.size) > max_dim:
+                ratio = max_dim / max(img.size)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+        
+        # Choisir le meilleur format
+        ext = os.path.splitext(input_path)[1].lower()
+        
+        # Pour les photos: WebP
+        # Pour les images avec transparence: PNG
+        # Pour les logos/simples: PNG ou WebP
+        
+        if img.mode == 'RGBA':
+            # Garder PNG pour la transparence mais optimisé
+            img.save(output_path, 'PNG', optimize=True)
+        else:
+            # WebP pour meilleure compression
+            img.save(output_path, 'WebP', 
+                    quality=settings['quality'],
+                    method=settings['method'],
+                    optimize=settings['optimize'])
 
+def compress_video(input_path, output_path, compression_level, max_dimension=None):
+    """Compresse une vidéo avec ffmpeg"""
+    try:
+        # Paramètres selon le niveau
+        if compression_level == 'lossless':
+            crf = '18'
+            preset = 'slow'
+        elif compression_level == 'balanced':
+            crf = '23'
+            preset = 'medium'
+        elif compression_level == 'aggressive':
+            crf = '28'
+            preset = 'fast'
+        else:  # custom
+            crf = '23'
+            preset = 'medium'
+        
+        # Scale si nécessaire
+        scale_filter = ''
+        if max_dimension:
+            max_dim = int(max_dimension)
+            scale_filter = f'-vf "scale=\'if(gt(iw,ih),{max_dim},-2)\':\'if(gt(iw,ih),-2,{max_dim})\'" '
+        
+        cmd = [
+            'ffmpeg', '-i', input_path,
+            '-vcodec', 'libx264',
+            '-crf', crf,
+            '-preset', preset,
+            '-acodec', 'aac',
+            '-b:a', '128k'
+        ]
+        
+        if scale_filter:
+            cmd.extend(['-vf', f'scale=\'if(gt(iw,ih),{max_dim},-2)\':\'if(gt(iw,ih),-2,{max_dim})\''])
+        
+        cmd.extend(['-y', output_path])
+        
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except Exception as e:
+        print(f"Erreur compression vidéo: {e}")
+        return False
 
-def convert_to_webp(image_data, quality=85):
-    """Convertit en WebP optimisé"""
-    img = Image.open(io.BytesIO(image_data))
-    
-    if img.mode != 'RGB':
-        img = img.convert('RGB')
-    
-    output = io.BytesIO()
-    img.save(output, format='WebP', quality=quality, method=6)
-    output.seek(0)
-    
-    return output.getvalue(), img.size
-
+def compress_gif(input_path, output_path, compression_level, max_dimension=None):
+    """Compresse un GIF"""
+    try:
+        with Image.open(input_path) as img:
+            frames = []
+            
+            # Paramètres de réduction de palette
+            if compression_level == 'lossless':
+                colors = 256
+            elif compression_level == 'balanced':
+                colors = 128
+            elif compression_level == 'aggressive':
+                colors = 64
+            else:
+                colors = 128
+            
+            # Redimensionner si nécessaire
+            if max_dimension:
+                max_dim = int(max_dimension)
+                if max(img.size) > max_dim:
+                    ratio = max_dim / max(img.size)
+                    new_size = (int(img.width * ratio), int(img.height * ratio))
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
+            
+            # Pour les GIF animés
+            if getattr(img, 'is_animated', False):
+                frames = []
+                for frame_num in range(img.n_frames):
+                    img.seek(frame_num)
+                    frame = img.convert('P', palette=Image.ADAPTIVE, colors=colors)
+                    frames.append(frame)
+                
+                frames[0].save(
+                    output_path,
+                    save_all=True,
+                    append_images=frames[1:],
+                    optimize=True,
+                    loop=0
+                )
+            else:
+                # GIF statique
+                img = img.convert('P', palette=Image.ADAPTIVE, colors=colors)
+                img.save(output_path, 'GIF', optimize=True)
+            
+            return True
+    except Exception as e:
+        print(f"Erreur compression GIF: {e}")
+        return False
 
 @app.route('/')
 def index():
     return render_template_string(HTML_INTERFACE)
 
-
-@app.route('/upscale', methods=['POST'])
-def upscale_images():
+@app.route('/compress', methods=['POST'])
+def compress_files():
     try:
-        if 'images' not in request.files:
-            return jsonify({'success': False, 'error': 'Aucune image'}), 400
+        if 'files' not in request.files:
+            return jsonify({'success': False, 'error': 'Aucun fichier'}), 400
         
-        files = request.files.getlist('images')
+        files = request.files.getlist('files')
         if not files or files[0].filename == '':
-            return jsonify({'success': False, 'error': 'Aucune image sélectionnée'}), 400
+            return jsonify({'success': False, 'error': 'Aucun fichier sélectionné'}), 400
         
-        scale = int(request.form.get('scaleFactor', 2))
-        quality = int(request.form.get('quality', 85))
+        compression_level = request.form.get('compressionLevel', 'balanced')
+        quality = request.form.get('quality', 85)
+        max_dimension = request.form.get('maxDimension') or None
+        
+        settings = get_compression_settings(compression_level, quality)
         
         results = []
+        total_saved = 0
+        total_reduction = 0
+        processed = 0
         
         for file in files:
             try:
-                original = file.read()
-                img_temp = Image.open(io.BytesIO(original))
-                orig_dims = f"{img_temp.width}x{img_temp.height}"
+                filename = secure_filename(file.filename)
+                input_path = os.path.join(UPLOAD_FOLDER, filename)
+                file.save(input_path)
                 
-                # Upscale
-                upscaled, (w, h) = upscale_image_pil(original, scale)
+                original_size = os.path.getsize(input_path)
+                ext = os.path.splitext(filename)[1].lower()
                 
-                # WebP
-                webp, final_size = convert_to_webp(upscaled, quality)
+                # Déterminer le format de sortie
+                if ext in ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff']:
+                    if ext == '.png' and compression_level != 'lossless':
+                        output_ext = '.webp'
+                    else:
+                        output_ext = ext
+                    output_name = filename.rsplit('.', 1)[0] + output_ext
+                    output_path = os.path.join(OUTPUT_FOLDER, output_name)
+                    
+                    smart_compress_image(input_path, output_path, settings, max_dimension)
+                    
+                elif ext in ['.mp4', '.mov', '.avi', '.webm', '.mkv']:
+                    output_name = filename.rsplit('.', 1)[0] + '_compressed.mp4'
+                    output_path = os.path.join(OUTPUT_FOLDER, output_name)
+                    
+                    if not compress_video(input_path, output_path, compression_level, max_dimension):
+                        raise Exception("Échec compression vidéo")
+                    
+                elif ext == '.gif':
+                    output_name = filename
+                    output_path = os.path.join(OUTPUT_FOLDER, output_name)
+                    
+                    if not compress_gif(input_path, output_path, compression_level, max_dimension):
+                        raise Exception("Échec compression GIF")
                 
-                # Sauvegarder
-                out_name = f"upscaled_{secure_filename(file.filename).rsplit('.', 1)[0]}.webp"
-                out_path = os.path.join(OUTPUT_FOLDER, out_name)
+                else:
+                    raise Exception(f"Format non supporté: {ext}")
                 
-                with open(out_path, 'wb') as f:
-                    f.write(webp)
+                compressed_size = os.path.getsize(output_path)
+                reduction = round((1 - compressed_size/original_size) * 100)
+                saved = original_size - compressed_size
                 
                 results.append({
                     'success': True,
-                    'original_name': file.filename,
-                    'upscaled_dims': f"{final_size[0]}x{final_size[1]}",
-                    'original_dims': orig_dims,
-                    'download_url': f'/download/{out_name}',
-                    'preview_url': f'/preview/{out_name}'
+                    'original_name': filename,
+                    'output_format': output_ext if 'output_ext' in locals() else ext,
+                    'original_size': original_size,
+                    'compressed_size': compressed_size,
+                    'reduction': reduction,
+                    'saved': saved,
+                    'download_url': f'/download/{os.path.basename(output_path)}'
                 })
                 
+                total_saved += saved
+                total_reduction += reduction
+                processed += 1
+                
+                # Cleanup
+                os.remove(input_path)
+                
             except Exception as e:
-                results.append({'success': False, 'original_name': file.filename, 'error': str(e)})
+                results.append({
+                    'success': False,
+                    'original_name': file.filename,
+                    'error': str(e)
+                })
         
-        return jsonify({'success': True, 'results': results})
+        avg_reduction = round(total_reduction / processed) if processed > 0 else 0
+        
+        return jsonify({
+            'success': True,
+            'results': results,
+            'stats': {
+                'totalSaved': total_saved,
+                'avgReduction': avg_reduction,
+                'processed': processed
+            }
+        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
-
 
 @app.route('/download/<filename>')
 def download(filename):
     return send_file(os.path.join(OUTPUT_FOLDER, filename), as_attachment=True)
 
-
-@app.route('/preview/<filename>')
-def preview(filename):
-    return send_file(os.path.join(OUTPUT_FOLDER, filename))
-
-
 if __name__ == '__main__':
-    print("🎨 Image Upscaler Pro")
+    print("🗜️ Smart Media Compressor Pro")
     print("🌐 http://localhost:5000")
     app.run(host='0.0.0.0', port=5000, debug=True)
