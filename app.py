@@ -535,30 +535,37 @@ def poll_task_result(task_id, api_key, api_url, max_attempts=60, delay=3):
             
             # Gérer différents statuts de completion
             if status in ('COMPLETED', 'SUCCESS', 'DONE', 'FINISHED'):
+                # Debug: voir tout le contenu de data
+                print(f"    DEBUG data: {data}")
+                
                 # Chercher l'URL dans différents emplacements possibles
                 image_url = None
                 
-                # Essayer différents emplacements possibles pour l'URL
-                image_url = None
+                # Vérifier data.generated (liste d'URLs)
+                if 'generated' in data:
+                    generated = data['generated']
+                    print(f"    DEBUG data.generated: {generated}")
+                    if isinstance(generated, list) and len(generated) > 0:
+                        image_url = generated[0]
+                        print(f"    ✓ URL trouvée dans data.generated[0]: {image_url[:50]}...")
+                    elif isinstance(generated, str):
+                        image_url = generated
+                        print(f"    ✓ URL trouvée dans data.generated (str): {image_url[:50]}...")
                 
-                if 'generated' in data and isinstance(data['generated'], list) and len(data['generated']) > 0:
-                    image_url = data['generated'][0]
-                    print(f"    ✓ URL trouvée dans data.generated[0]")
-                elif 'url' in data:
-                    image_url = data['url']
-                    print(f"    ✓ URL trouvée dans data.url")
-                elif 'image_url' in data:
-                    image_url = data['image_url']
-                    print(f"    ✓ URL trouvée dans data.image_url")
-                elif 'output_url' in data:
-                    image_url = data['output_url']
-                    print(f"    ✓ URL trouvée dans data.output_url")
-                elif 'result' in result and isinstance(result['result'], dict) and 'url' in result['result']:
-                    image_url = result['result']['url']
-                    print(f"    ✓ URL trouvée dans result.result.url")
+                # Si pas trouvé, essayer les autres emplacements
+                if not image_url:
+                    if 'url' in data:
+                        image_url = data['url']
+                        print(f"    ✓ URL trouvée dans data.url")
+                    elif 'image_url' in data:
+                        image_url = data['image_url']
+                        print(f"    ✓ URL trouvée dans data.image_url")
+                    elif 'output_url' in data:
+                        image_url = data['output_url']
+                        print(f"    ✓ URL trouvée dans data.output_url")
                 
                 if image_url:
-                    print(f"  → Téléchargement de l'image: {image_url[:50]}...")
+                    print(f"  → Téléchargement de l'image...")
                     img_response = requests.get(image_url, timeout=60)
                     if img_response.status_code == 200:
                         return img_response.content, data
@@ -566,7 +573,7 @@ def poll_task_result(task_id, api_key, api_url, max_attempts=60, delay=3):
                         raise Exception(f"Failed to download image: {img_response.status_code}")
                 
                 # Debug: afficher la structure reçue
-                raise Exception(f"Result URL not found. Keys in data: {list(data.keys())}")
+                raise Exception(f"Result URL not found. Data: {data}")
             elif status in ('FAILED', 'ERROR', 'CANCELLED'):
                 error_msg = result.get('error') or data.get('error', 'Unknown error')
                 raise Exception(f"Task failed: {error_msg}")
