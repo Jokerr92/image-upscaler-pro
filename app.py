@@ -9,7 +9,7 @@ import os
 import io
 import subprocess
 import shutil
-from PIL import Image, ImageOptimizer
+from PIL import Image
 from flask import Flask, request, jsonify, send_file, render_template_string
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
