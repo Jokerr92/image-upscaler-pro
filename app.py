@@ -539,16 +539,23 @@ def poll_task_result(task_id, api_key, api_url, max_attempts=60, delay=3):
                 image_url = None
                 
                 # Essayer différents emplacements possibles pour l'URL
-                if 'url' in data:
-                    image_url = data['url']
-                elif 'generated' in data and len(data['generated']) > 0:
+                image_url = None
+                
+                if 'generated' in data and isinstance(data['generated'], list) and len(data['generated']) > 0:
                     image_url = data['generated'][0]
+                    print(f"    ✓ URL trouvée dans data.generated[0]")
+                elif 'url' in data:
+                    image_url = data['url']
+                    print(f"    ✓ URL trouvée dans data.url")
                 elif 'image_url' in data:
                     image_url = data['image_url']
+                    print(f"    ✓ URL trouvée dans data.image_url")
                 elif 'output_url' in data:
                     image_url = data['output_url']
-                elif 'result' in result and 'url' in result['result']:
+                    print(f"    ✓ URL trouvée dans data.output_url")
+                elif 'result' in result and isinstance(result['result'], dict) and 'url' in result['result']:
                     image_url = result['result']['url']
+                    print(f"    ✓ URL trouvée dans result.result.url")
                 
                 if image_url:
                     print(f"  → Téléchargement de l'image: {image_url[:50]}...")
